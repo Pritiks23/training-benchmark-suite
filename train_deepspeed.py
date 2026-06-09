@@ -1,11 +1,25 @@
-import os
 import json
 import torch
 import deepspeed
 
 from model import get_model
 from dataset import ToyDataset
-from metrics import Timer, gpu_util, mem
+from metrics import gpu_util, mem
+
+
+# -----------------------------
+# DeepSpeed config (minimal stable)
+# -----------------------------
+ds_config = {
+    "train_micro_batch_size_per_gpu": 2,
+    "gradient_accumulation_steps": 1,
+    "fp16": {
+        "enabled": True
+    },
+    "zero_optimization": {
+        "stage": 2
+    }
+}
 
 
 def run():
@@ -14,25 +28,10 @@ def run():
     # Model
     # -----------------------------
     model = get_model()
+    model.train()
 
-    # -----------------------------
-    # Optimizer (REQUIRED for ZeRO)
-    # -----------------------------
+    # REQUIRED for DeepSpeed ZeRO
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-
-    # -----------------------------
-    # DeepSpeed config
-    # -----------------------------
-    ds_config = {
-        "train_batch_size": 2,
-        "train_micro_batch_size_per_gpu": 2,
-        "zero_optimization": {
-            "stage": 2
-        },
-        "fp16": {
-            "enabled": True
-        }
-    }
 
     # -----------------------------
     # Init DeepSpeed engine
@@ -48,37 +47,40 @@ def run():
     # -----------------------------
     loader = ToyDataset()
 
+    # -----------------------------
+    # Training loop
+    # -----------------------------
     for step, batch in enumerate(loader):
 
-        # Move tensors to GPU
+        # move batch to GPU
         batch = {k: v.to(model_engine.device) for k, v in batch.items()}
 
         # -----------------------------
-        # Forward (SAFE HF FORMAT)
+        # SAFE forward (THIS FIXES YOUR ERROR)
         # -----------------------------
         outputs = model_engine(
             input_ids=batch["input_ids"],
-            attention_mask=batch.get("attention_mask", None),
-            labels=batch["labels"]
+            attention_mask=batch["attention_mask"],
+            labels=batch["labels"],
+            return_dict=True
         )
 
         loss = outputs.loss
 
         # -----------------------------
-        # Backward + step
+        # backward + step
         # -----------------------------
         model_engine.backward(loss)
         model_engine.step()
 
         # -----------------------------
-        # Logging (benchmark format)
+        # logging
         # -----------------------------
         print(json.dumps({
             "step": step,
-            "time_ms": None,  # optional if you add Timer later
             "gpu": gpu_util(),
             "mem": mem(),
-            "loss": loss.item()
+            "loss": float(loss.item())
         }))
 
         if step >= 50:
