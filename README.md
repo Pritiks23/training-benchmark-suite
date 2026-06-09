@@ -1,6 +1,9 @@
 # FSDP vs PyTorch Baseline Training Benchmark using RTX 4090 GPU
 
 ## Overview
+<img width="640" height="480" alt="image" src="https://github.com/user-attachments/assets/481da7e9-075c-45a5-a84e-5f979cda7283" />
+<img width="640" height="480" alt="image" src="https://github.com/user-attachments/assets/f7fb5c03-4b56-4bfc-893d-140e3e51db93" />
+
 
 This project benchmarks and compares two training paradigms for a causal language model (GPT-style architecture):
 
