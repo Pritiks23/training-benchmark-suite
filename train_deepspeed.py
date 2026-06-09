@@ -12,8 +12,9 @@ def run():
     # FORCE OFFLINE TOKENIZER
     # -------------------------
     tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_PATH,
-        local_files_only=True
+    MODEL_PATH,
+    local_files_only=True,
+    use_fast=True
     )
 
     model = AutoModelForCausalLM.from_pretrained(
