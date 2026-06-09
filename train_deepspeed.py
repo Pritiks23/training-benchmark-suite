@@ -1,89 +1,68 @@
+import time
 import json
 import torch
 import deepspeed
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from model import get_model
-from dataset import ToyDataset
-from metrics import gpu_util, mem
+MODEL_NAME = "gpt2"  # keep stable for benchmark consistency
+
+def gpu_util():
+    return torch.cuda.utilization() if torch.cuda.is_available() else 0
+
+def mem():
+    return torch.cuda.memory_allocated() / 1e6 if torch.cuda.is_available() else 0
 
 
-# -----------------------------
-# DeepSpeed config (minimal + stable)
-# -----------------------------
-ds_config = {
-    "train_micro_batch_size_per_gpu": 2,
-    "gradient_accumulation_steps": 1,
-    "fp16": {
-        "enabled": True
-    },
-    "zero_optimization": {
-        "stage": 2
+def make_batch(tokenizer):
+    text = "Hello world " * 32
+    tokens = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=128)
+
+    # IMPORTANT: GPT2 sometimes has no attention_mask dependency in older wrappers
+    return {
+        "input_ids": tokens["input_ids"],
+        "labels": tokens["input_ids"].clone(),
     }
-}
 
 
 def run():
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer.pad_token = tokenizer.eos_token
 
-    # -----------------------------
-    # Model
-    # -----------------------------
-    model = get_model()
-    model.train()
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
 
-    # DeepSpeed REQUIRES optimizer for ZeRO
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-
-    # -----------------------------
-    # Init DeepSpeed engine
-    # -----------------------------
     model_engine, optimizer, _, _ = deepspeed.initialize(
         model=model,
-        optimizer=optimizer,
-        config=ds_config
+        model_parameters=model.parameters(),
+        config={
+            "train_batch_size": 1,
+            "fp16": {"enabled": False},
+            "zero_optimization": {"stage": 2},
+        },
     )
 
-    # -----------------------------
-    # Data
-    # -----------------------------
-    loader = ToyDataset()
+    batch = make_batch(tokenizer)
 
-    # -----------------------------
-    # Training loop
-    # -----------------------------
-    for step, batch in enumerate(loader):
+    for step in range(50):
+        start = time.time()
 
-        # move batch to GPU
-        batch = {k: v.to(model_engine.device) for k, v in batch.items()}
-
-        # -----------------------------
-        # SAFE HF FORWARD (FIXES YOUR ERROR)
-        # -----------------------------
         outputs = model_engine(
             input_ids=batch["input_ids"],
             labels=batch["labels"],
-            return_dict=True
         )
 
         loss = outputs.loss
-
-        # -----------------------------
-        # backward + step
-        # -----------------------------
         model_engine.backward(loss)
         model_engine.step()
 
-        # -----------------------------
-        # logging
-        # -----------------------------
+        dt = (time.time() - start) * 1000
+
         print(json.dumps({
             "step": step,
+            "time_ms": dt,
             "gpu": gpu_util(),
             "mem": mem(),
-            "loss": float(loss.item())
+            "loss": loss.item()
         }))
-
-        if step >= 50:
-            break
 
 
 if __name__ == "__main__":
